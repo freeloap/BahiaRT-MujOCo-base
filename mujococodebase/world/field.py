@@ -40,11 +40,24 @@ class FIFAField(Field):
 class HLAdultField(Field):
     def __init__(self, world):
         super().__init__(world)
-    
+
     @override
     def get_width(self):
         return 9
-    
+
     @override
     def get_length(self):
         return 14
+
+
+class SevenVSevenField(Field):
+    def __init__(self, world):
+        super().__init__(world)
+
+    @override
+    def get_width(self):
+        return 36
+
+    @override
+    def get_length(self):
+        return 55
