@@ -17,6 +17,7 @@ from mujococodebase.utils.neural_network import load_network, run_network
 
 # 必须与 rl_getup/getup_env.py 中的常量一致
 KP, KD = 200.0, 5.0
+REF_DURATION = 3.5      # 参考起身相位时长（s），phase 时钟用
 MOTORS = ["he1","he2","lae1","lae2","lae3","lae4","rae1","rae2","rae3","rae4","te1",
           "lle1","lle2","lle3","lle4","lle5","lle6","rle1","rle2","rle3","rle4","rle5","rle6"]
 
@@ -39,6 +40,8 @@ class GetUpRL(Skill):
         self.scale = np.maximum(np.abs(self.jlo), np.abs(self.jhi))
         self.prev_action = np.zeros(len(MOTORS))
         self._stable = 0
+        self.phase = 0.0
+        self._t0 = None         # 起身开始的 server_time，用于推进 phase
 
     def _obs(self):
         robot = self.agent.robot
@@ -49,12 +52,19 @@ class GetUpRL(Skill):
         rot = R.from_quat(robot.global_orientation_quat)  # [x,y,z,w]
         proj_g = rot.inv().apply([0.0, 0.0, -1.0])
         ang_vel = np.radians(robot.gyroscope)  # 陀螺仪已是躯干系 (deg/s)
-        return np.concatenate([qn, dq * 0.1, proj_g, ang_vel * 0.25, self.prev_action]).astype(np.float32)
+        return np.concatenate([qn, dq * 0.1, proj_g, ang_vel * 0.25,
+                               self.prev_action, [self.phase]]).astype(np.float32)
 
     def execute(self, reset, *args, **kwargs) -> bool:
         if reset:
             self.prev_action = np.zeros(len(MOTORS))
             self._stable = 0
+            self.phase = 0.0
+            self._t0 = self.agent.world.server_time
+        # 按真实时间推进参考相位（与训练 REF_DURATION 一致）
+        now = self.agent.world.server_time
+        if now is not None and self._t0 is not None:
+            self.phase = float(min(1.0, max(0.0, (now - self._t0) / REF_DURATION)))
 
         action = run_network(obs=self._obs(), model=self.model)
         action = np.clip(action, -1, 1)

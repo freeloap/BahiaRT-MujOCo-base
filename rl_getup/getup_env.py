@@ -74,6 +74,40 @@ STAND_HEIGHT = 0.62      # 站立目标躯干高度（m）
 KP, KD = 200.0, 5.0      # PD 增益（部署的 GetUpRL 技能须用同值）
 CTRL_DT = 0.02           # 控制周期（s）=> 每个动作步进 4 个 0.005 仿真步
 EP_TIME = 8.0            # 每回合时长（s）
+REF_DURATION = 3.5       # 参考起身动作时长（s）；phase 在此时间内 0->1，之后保持站立
+
+# ===== 参考起身动作（DeepMimic 思路）=====
+# 关键相位的腿部姿态(弧度)：屈髋=负 Hip_Pitch、屈膝=正 Knee、踝背屈=负 Ankle。
+# 仅约束腿部矢状面与躯干俯仰/高度（其余关节由策略自由发挥做平衡）。
+REF_PHASES = np.array([0.0, 0.25, 0.50, 0.75, 1.0])
+REF_LEGS = np.array([            # [hip_pitch, knee, ankle_pitch]（双腿对称）
+    [0.0,  0.0,  0.0],           # 仰卧：腿伸直
+    [-1.4, 1.9, -0.3],           # 团身：屈髋屈膝把腿收向胸口
+    [-1.0, 1.6, -0.5],           # 深蹲：脚收到身下、躯干直立
+    [-0.5, 0.9, -0.3],           # 起立中
+    [0.0,  0.0,  0.0],           # 站直
+])
+REF_HEIGHT = np.array([0.20, 0.25, 0.35, 0.50, 0.62])   # 参考躯干高度
+REF_PITCH = np.array([90.0, 70.0, 20.0, 5.0, 0.0])      # 参考躯干俯仰(度)：仰卧90->直立0
+# 腿部关节在 MOTORS 中的下标
+_HIP = (MOTORS.index("lle1"), MOTORS.index("rle1"))
+_KNEE = (MOTORS.index("lle4"), MOTORS.index("rle4"))
+_ANK = (MOTORS.index("lle5"), MOTORS.index("rle5"))
+
+
+def ref_pose(phase):
+    """返回参考相位的 (全23维目标弧度, 参考高度, 参考俯仰度)。"""
+    p = float(np.clip(phase, 0.0, 1.0))
+    hip = np.interp(p, REF_PHASES, REF_LEGS[:, 0])
+    knee = np.interp(p, REF_PHASES, REF_LEGS[:, 1])
+    ank = np.interp(p, REF_PHASES, REF_LEGS[:, 2])
+    q = np.zeros(N)
+    for i in _HIP: q[i] = hip
+    for i in _KNEE: q[i] = knee
+    for i in _ANK: q[i] = ank
+    h = float(np.interp(p, REF_PHASES, REF_HEIGHT))
+    pitch = float(np.interp(p, REF_PHASES, REF_PITCH))
+    return q, h, pitch
 
 
 class GetUpEnv(_Base):
@@ -89,10 +123,12 @@ class GetUpEnv(_Base):
         self.max_steps = int(EP_TIME / CTRL_DT)
         self.prev_action = np.zeros(N)
         self.t = 0
+        self.phase = 0.0
+        self.dphase = CTRL_DT / REF_DURATION
         if _HAS_GYM:
             self.action_space = spaces.Box(-1.0, 1.0, (N,), np.float32)
-            hi = np.full(75, np.inf, np.float32)
-            self.observation_space = spaces.Box(-hi, hi, (75,), np.float32)
+            hi = np.full(76, np.inf, np.float32)
+            self.observation_space = spaces.Box(-hi, hi, (76,), np.float32)
 
     # ---------- 建模 ----------
     def _build(self):
@@ -147,7 +183,7 @@ class GetUpEnv(_Base):
         dq = self.data.qvel[self.dadr]
         qn = 2 * (q - self.jlo) / (self.jhi - self.jlo) - 1  # 归一化到 [-1,1]
         return np.concatenate([qn, dq * 0.1, self._proj_gravity(), self._ang_vel_torso() * 0.25,
-                               self.prev_action]).astype(np.float32)
+                               self.prev_action, [self.phase]]).astype(np.float32)
 
     # ---------- reset ----------
     def reset(self, *, seed=None, options=None):
@@ -155,23 +191,22 @@ class GetUpEnv(_Base):
             self.rng = np.random.default_rng(seed)
         mujoco.mj_resetData(self.model, self.data)
         force_fallen = bool(options and options.get("fallen"))  # 评估真起身用：强制倒地起步
-        if (not force_fallen) and self.rng.random() < 0.5:
-            # 参考态初始化：直立躯干 + 随机蹲深（c=0 站直 ~ c=1 深蹲），均匀覆盖
-            # 全高度段，兼顾"蹲→站"各深度；与倒地起步各占一半，两段都练到。
-            c = float(self.rng.random())
-            crouch = np.zeros(N)
-            for m, v in (("lle1", -1.0), ("rle1", -1.0), ("lle4", 1.6), ("rle4", 1.6),
-                         ("lle5", -0.6), ("rle5", -0.6)):
-                crouch[MOTORS.index(m)] = v * c          # 屈髋负/屈膝正/踝背屈负
-            crouch = np.clip(crouch, self.jlo, self.jhi)
-            self.data.qpos[2] = 0.62 - 0.30 * c
-            self.data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]            # 躯干直立
-            self.data.qpos[self.qadr] = crouch + self.rng.uniform(-0.05, 0.05, N)
+        if (not force_fallen) and self.rng.random() < 0.7:
+            # 参考态初始化(RSI)：沿参考起身轨迹随机相位起步，按该相位摆好腿部姿态、
+            # 躯干俯仰与高度，使策略在整条轨迹上都得到训练（DeepMimic 标准做法）。
+            p = float(self.rng.random())
+            self.phase = p
+            qref, href, pitch = ref_pose(p)
+            rad = np.radians(pitch)  # 躯干绕 y 轴俯仰
+            self.data.qpos[2] = href + 0.05
+            self.data.qpos[3:7] = [np.cos(rad / 2), 0.0, np.sin(rad / 2), 0.0]
+            self.data.qpos[self.qadr] = np.clip(qref, self.jlo, self.jhi) + self.rng.uniform(-0.04, 0.04, N)
             mujoco.mj_forward(self.model, self.data)
-            for _ in range(60):  # 保持蹲姿落定
-                self._apply_pd(crouch); mujoco.mj_step(self.model, self.data)
+            for _ in range(40):  # 落定
+                self._apply_pd(np.clip(qref, self.jlo, self.jhi)); mujoco.mj_step(self.model, self.data)
         else:
-            # 倒地姿态：绕 y 转 ±90°(俯/仰卧) 或侧卧，落地稳定
+            # 倒地姿态：绕 y 转 ±90°(俯/仰卧) 或侧卧，落地稳定；phase 从 0 起
+            self.phase = 0.0
             mode = self.rng.integers(0, 3)
             s = {0: [0.7071, 0, -0.7071, 0], 1: [0.7071, 0, 0.7071, 0], 2: [0.7071, 0.7071, 0, 0]}[int(mode)]
             self.data.qpos[2] = 0.35
@@ -193,25 +228,31 @@ class GetUpEnv(_Base):
             mujoco.mj_step(self.model, self.data)
         self.prev_action = action
         self.t += 1
+        self.phase = min(1.0, self.phase + self.dphase)   # 推进参考相位
 
         h = float(self.data.qpos[2])
         pg = self._proj_gravity()
         upright = float(-pg[2])                 # 直立时 ≈ +1
         h_frac = min(h / STAND_HEIGHT, 1.0)
         upright01 = max(0.0, upright)
-        # 关键：直立必须「配合站高」才给分（乘积），杜绝"蹲着保持竖直"的偷懒局部最优
-        # 正向强梯度：站立比深蹲分数高 ~14 倍，学习信号干净（处处为正、不打击探索），
-        # 同时把"真正站直"的爬坡奖励权重拉满，最大化指向站立的梯度。
+
+        # 模仿奖励：当前腿部姿态贴合参考相位姿态（DeepMimic 核心，引导探索沿起身轨迹）
+        qref, _, _ = ref_pose(self.phase)
+        leg_idx = list(_HIP) + list(_KNEE) + list(_ANK)
+        leg_err = float(np.mean((self.data.qpos[self.qadr][leg_idx] - qref[leg_idx]) ** 2))
+        r_imit = float(np.exp(-3.0 * leg_err))           # ~1 完全贴合
+
+        # 任务奖励：真正站高+直立（确保不是只摆姿势，而是真平衡站起来）
         r_posture = 1.5 * upright01 * h_frac
         ramp = float(np.clip((h - 0.40) / (0.58 - 0.40), 0.0, 1.0))
-        r_stand = 6.0 * ramp * upright01                 # 站直爬坡 大额
+        r_stand = 4.0 * ramp * upright01
         r_ctrl = -0.001 * float(np.sum(action ** 2))
         r_smooth = -0.0005 * float(np.sum(self.data.qvel[self.dadr] ** 2))
-        reward = r_posture + r_stand + r_ctrl + r_smooth + 0.05
+        reward = 2.0 * r_imit + r_posture + r_stand + r_ctrl + r_smooth + 0.05
 
         terminated = False
         truncated = self.t >= self.max_steps
-        info = {"h": h, "upright": upright, "r_stand": r_stand}
+        info = {"h": h, "upright": upright, "phase": self.phase}
         return self._obs(), float(reward), terminated, truncated, info
 
 
