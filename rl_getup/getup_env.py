@@ -200,15 +200,14 @@ class GetUpEnv(_Base):
         h_frac = min(h / STAND_HEIGHT, 1.0)
         upright01 = max(0.0, upright)
         # 关键：直立必须「配合站高」才给分（乘积），杜绝"蹲着保持竖直"的偷懒局部最优
-        # 高度主导、以站立基准线(0.45m)为零点：低于则为负，使"舒适深蹲"变成扣分，
-        # 逼策略必须站起来才能得正分（回合不提前结束，躺着也逃不掉）。
-        r_height = 6.0 * (h - 0.45)                      # 主项
-        r_posture = 2.0 * upright01 * h_frac             # 直立且站高 的加成
+        # 正向强梯度：站立比深蹲分数高 ~14 倍，学习信号干净（处处为正、不打击探索），
+        # 同时把"真正站直"的爬坡奖励权重拉满，最大化指向站立的梯度。
+        r_posture = 1.5 * upright01 * h_frac
         ramp = float(np.clip((h - 0.40) / (0.58 - 0.40), 0.0, 1.0))
-        r_stand = 3.0 * ramp * upright01                 # 真站起的大额奖励
+        r_stand = 6.0 * ramp * upright01                 # 站直爬坡 大额
         r_ctrl = -0.001 * float(np.sum(action ** 2))
         r_smooth = -0.0005 * float(np.sum(self.data.qvel[self.dadr] ** 2))
-        reward = r_height + r_posture + r_stand + r_ctrl + r_smooth
+        reward = r_posture + r_stand + r_ctrl + r_smooth + 0.05
 
         terminated = False
         truncated = self.t >= self.max_steps
