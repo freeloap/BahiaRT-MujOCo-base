@@ -191,7 +191,7 @@ class GetUpEnv(_Base):
             self.rng = np.random.default_rng(seed)
         mujoco.mj_resetData(self.model, self.data)
         force_fallen = bool(options and options.get("fallen"))  # 评估真起身用：强制倒地起步
-        if (not force_fallen) and self.rng.random() < 0.7:
+        if (not force_fallen) and self.rng.random() < 0.5:
             # 参考态初始化(RSI)：沿参考起身轨迹随机相位起步，按该相位摆好腿部姿态、
             # 躯干俯仰与高度，使策略在整条轨迹上都得到训练（DeepMimic 标准做法）。
             p = float(self.rng.random())
