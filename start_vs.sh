@@ -11,12 +11,12 @@ team_b=${4:-Baseline}
 
 echo "启动队伍 A：$team_a（7 人）"
 for i in {1..7}; do
-  python3 run_player.py --host $host --port $port -n $i -t $team_a -f hl_adult &
+  python3 run_player.py --host $host --port $port -n $i -t $team_a -f 7v7 &
 done
 
 echo "启动队伍 B：$team_b（7 人）"
 for i in {1..7}; do
-  python3 run_player.py --host $host --port $port -n $i -t $team_b -f hl_adult &
+  python3 run_player.py --host $host --port $port -n $i -t $team_b -f 7v7 &
 done
 
 echo "两队已启动。用 ./kill.sh 结束全部球员。"

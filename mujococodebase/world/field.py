@@ -15,10 +15,9 @@ class Field(ABC):
     def get_their_goal_position(self):
         return (self.get_length()/2, 0)
 
-    # ----------------------------- 禁区近似 -----------------------------
+    # ----------------------------- 禁区 -----------------------------
     # 比赛规则约束「本方禁区最多 2 人」（非法防守），需要判断某点是否在己方禁区。
-    # 服务器未通过感知暴露禁区尺寸，这里按 9×14 场地给出近似值，留成方法便于按
-    # 真实服务器实测后调整。
+    # 各子类按 rcssservermj 服务器 soccer_fields.py 的 penalty_area_dim 给出真实值。
 
     def get_penalty_depth(self) -> float:
         """禁区从己方端线向场内延伸的纵深（米）。"""
@@ -48,14 +47,23 @@ class Field(ABC):
 class FIFAField(Field):
     def __init__(self, world):
         super().__init__(world)
-    
+
     @override
     def get_width(self):
         return 68
-    
+
     @override
     def get_length(self):
         return 105
+
+    # 服务器 penalty_area_dim=(16.5, 40.32)
+    @override
+    def get_penalty_depth(self):
+        return 16.5
+
+    @override
+    def get_penalty_half_width(self):
+        return 20.16
     
 
 class HLAdultField(Field):
@@ -72,6 +80,8 @@ class HLAdultField(Field):
 
 
 class SevenVSevenField(Field):
+    """比赛用 7v7 场地，对应服务器 fifa7vs7（55×36m）。"""
+
     def __init__(self, world):
         super().__init__(world)
 
@@ -82,3 +92,12 @@ class SevenVSevenField(Field):
     @override
     def get_length(self):
         return 55
+
+    # 服务器 penalty_area_dim=(9, 16.5)
+    @override
+    def get_penalty_depth(self):
+        return 9.0
+
+    @override
+    def get_penalty_half_width(self):
+        return 8.25

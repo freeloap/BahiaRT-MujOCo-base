@@ -9,6 +9,6 @@ port=${2:-60000}
 team=${3:-Freeloap}
 
 # 守门员
-python3 run_player.py --host $host --port $port -n 1 -t $team -f hl_adult &
+python3 run_player.py --host $host --port $port -n 1 -t $team -f 7v7 &
 # 射手
-python3 run_player.py --host $host --port $port -n 7 -t $team -f hl_adult &
+python3 run_player.py --host $host --port $port -n 7 -t $team -f 7v7 &
