@@ -150,16 +150,25 @@ class GetUpEnv(_Base):
         if seed is not None:
             self.rng = np.random.default_rng(seed)
         mujoco.mj_resetData(self.model, self.data)
-        # 随机一个倒地姿态：绕 y 转 ±90°(俯/仰卧) 或侧卧，落地稳定
-        mode = self.rng.integers(0, 3)
-        s = {0: [0.7071, 0, -0.7071, 0], 1: [0.7071, 0, 0.7071, 0], 2: [0.7071, 0.7071, 0, 0]}[int(mode)]
-        self.data.qpos[2] = 0.35
-        self.data.qpos[3:7] = s
-        # 关节加一点随机
-        self.data.qpos[self.qadr] = self.rng.uniform(self.jlo, self.jhi) * 0.1
-        mujoco.mj_forward(self.model, self.data)
-        for _ in range(120):  # 0.6s 落地
-            self._apply_pd(np.zeros(N)); mujoco.mj_step(self.model, self.data)
+        if self.rng.random() < 0.4:
+            # 课程式：40% 回合从「站立附近」开始，先学会站立保持平衡，
+            # 价值函数再把「站立=高分且可达」反传到倒地状态，破解"深蹲偷懒"局部最优。
+            self.data.qpos[2] = 0.62
+            self.data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]            # 躯干直立
+            self.data.qpos[self.qadr] = self.rng.uniform(-0.1, 0.1, N)
+            mujoco.mj_forward(self.model, self.data)
+            for _ in range(40):
+                self._apply_pd(np.zeros(N)); mujoco.mj_step(self.model, self.data)
+        else:
+            # 倒地姿态：绕 y 转 ±90°(俯/仰卧) 或侧卧，落地稳定
+            mode = self.rng.integers(0, 3)
+            s = {0: [0.7071, 0, -0.7071, 0], 1: [0.7071, 0, 0.7071, 0], 2: [0.7071, 0.7071, 0, 0]}[int(mode)]
+            self.data.qpos[2] = 0.35
+            self.data.qpos[3:7] = s
+            self.data.qpos[self.qadr] = self.rng.uniform(self.jlo, self.jhi) * 0.1
+            mujoco.mj_forward(self.model, self.data)
+            for _ in range(120):  # 0.6s 落地
+                self._apply_pd(np.zeros(N)); mujoco.mj_step(self.model, self.data)
         self.prev_action = np.zeros(N)
         self.t = 0
         return self._obs(), {}
@@ -182,10 +191,13 @@ class GetUpEnv(_Base):
         # 关键：直立必须「配合站高」才给分（乘积），杜绝"蹲着保持竖直"的偷懒局部最优
         r_posture = upright01 * h_frac
         r_tall = h_frac                          # 额外直接鼓励站高
-        r_stand = 1.0 if (h > 0.5 and upright > 0.9) else 0.0   # 真站起来的大额奖励
+        # 站立奖励改为平滑爬坡：在 0.35~0.58m 之间从 0 线性升到 1（须直立），
+        # 持续穿过"深蹲高度"往上拉，而非 h>0.5 的硬阈值（之前从未触发）。
+        ramp = float(np.clip((h - 0.35) / (0.58 - 0.35), 0.0, 1.0))
+        r_stand = ramp * upright01
         r_ctrl = -0.001 * float(np.sum(action ** 2))
         r_smooth = -0.0005 * float(np.sum(self.data.qvel[self.dadr] ** 2))
-        reward = 3.0 * r_posture + 1.0 * r_tall + 3.0 * r_stand + r_ctrl + r_smooth + 0.05
+        reward = 3.0 * r_posture + 1.0 * r_tall + 4.0 * r_stand + r_ctrl + r_smooth + 0.05
 
         terminated = False
         truncated = self.t >= self.max_steps
