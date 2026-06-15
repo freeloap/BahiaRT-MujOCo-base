@@ -35,6 +35,8 @@ class GetUpRL(Skill):
         lim = self.agent.robot.JOINT_LIMITS
         self.jlo = np.radians([lim[m][0] for m in MOTORS])
         self.jhi = np.radians([lim[m][1] for m in MOTORS])
+        # 动作幅度，须与 getup_env 一致：action=0->0弧度(站立)、±1触及限位
+        self.scale = np.maximum(np.abs(self.jlo), np.abs(self.jhi))
         self.prev_action = np.zeros(len(MOTORS))
         self._stable = 0
 
@@ -58,8 +60,8 @@ class GetUpRL(Skill):
         action = np.clip(action, -1, 1)
         self.prev_action = action
 
-        # 动作 -> 目标角（度），按 KP/KD 下发
-        target_rad = self.jlo + (action + 1.0) * 0.5 * (self.jhi - self.jlo)
+        # 动作 -> 目标角（度），按 KP/KD 下发（映射须与 getup_env 一致）
+        target_rad = np.clip(action * self.scale, self.jlo, self.jhi)
         for i, m in enumerate(MOTORS):
             self.agent.robot.set_motor_target_position(m, float(np.degrees(target_rad[i])), kp=KP, kd=KD)
 

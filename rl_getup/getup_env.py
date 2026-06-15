@@ -116,6 +116,8 @@ class GetUpEnv(_Base):
                 self.frclo[i], self.frchi[i] = self.model.jnt_actfrcrange[jid]
             else:
                 self.frclo[i], self.frchi[i] = -1e6, 1e6
+        # 动作幅度：每关节取 max(|lo|,|hi|)，使 action=0->0 弧度(站立)、±1 触及限位
+        self.scale = np.maximum(np.abs(self.jlo), np.abs(self.jhi))
         self.torso_bid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "torso")
 
     # ---------- 物理/控制 ----------
@@ -126,8 +128,10 @@ class GetUpEnv(_Base):
         self.data.qfrc_applied[self.dadr] = tau
 
     def _action_to_target(self, a):
+        # action=0 -> 关节 0 弧度（站立姿态），±1 -> 触及该关节较远的限位。
+        # 这样"站立"是默认动作，蹲下需主动出力，避免动作参数化把策略带向蹲姿。
         a = np.clip(a, -1, 1)
-        return self.jlo + (a + 1.0) * 0.5 * (self.jhi - self.jlo)  # [-1,1]->[lo,hi]（弧度）
+        return np.clip(a * self.scale, self.jlo, self.jhi)
 
     # ---------- 观测 ----------
     def _proj_gravity(self):
