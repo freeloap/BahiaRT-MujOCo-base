@@ -24,8 +24,38 @@ except Exception:
 
 
 def _robot_xml():
-    import rcsssmj
-    return os.path.join(os.path.dirname(rcsssmj.__file__), "resources", "robots", "T1", "robot.xml")
+    """定位 T1 模型 robot.xml。
+
+    优先用环境变量 T1_ROBOT_XML；否则尝试 import rcsssmj（若该 venv 装了）；
+    最后回退到已知的 pipx 安装路径 glob。这样训练 venv 不必安装 rcsssmj。
+    """
+    # 1) 环境变量显式指定
+    env_path = os.environ.get("T1_ROBOT_XML")
+    if env_path and os.path.exists(env_path):
+        return env_path
+    # 2) 若当前 venv 恰好装了 rcsssmj
+    try:
+        import rcsssmj
+        p = os.path.join(os.path.dirname(rcsssmj.__file__), "resources", "robots", "T1", "robot.xml")
+        if os.path.exists(p):
+            return p
+    except Exception:
+        pass
+    # 3) 回退：在 pipx/常见 site-packages 里搜
+    import glob
+    patterns = [
+        os.path.expanduser("~/.local/share/pipx/venvs/*/lib/python*/site-packages/rcsssmj/resources/robots/T1/robot.xml"),
+        os.path.expanduser("~/.local/lib/python*/site-packages/rcsssmj/resources/robots/T1/robot.xml"),
+        "/usr/lib/python*/site-packages/rcsssmj/resources/robots/T1/robot.xml",
+    ]
+    for pat in patterns:
+        hits = glob.glob(pat)
+        if hits:
+            return hits[0]
+    raise FileNotFoundError(
+        "找不到 T1 robot.xml。请设置环境变量 T1_ROBOT_XML 指向 rcsssmj 的 "
+        "resources/robots/T1/robot.xml，或在本 venv 安装 rcsssmj。"
+    )
 
 
 # 服务器电机码顺序（动作/观测的关节顺序，与 robot.py ROBOT_MOTORS 一致）
