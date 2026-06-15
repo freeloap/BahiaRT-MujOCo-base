@@ -58,19 +58,30 @@ class Robot(ABC):
         """
         raise NotImplementedError()
 
+    # 各电机的关节角限位（度）。子类按机器人型号填充；为空则不钳制。
+    JOINT_LIMITS: dict = {}
+
     def set_motor_target_position(
         self, motor_name: str, target_position: float, kp: float = 10, kd: float = 0.1
     ) -> None:
         """
-        Sets the desired position and PD gains for a given motor.
+        设置某个电机的目标角度与 PD 增益。
 
-        For now, directly sets positions, as the simulator is doing the control
+        会把目标角度钳制到该电机的物理限位内（见 JOINT_LIMITS），避免任何技能
+        （起身关键帧、走路策略等）下发机器人做不到的角度——超界角度会让 PD 控制
+        器死怼限位、关节互相打架，表现为机器人在地上抽搐。
+
         Args:
-            motor_name: Name of the motor.
-            target_position: Desired position in radians.
-            kp: Proportional gain.
-            kd: Derivative gain.
+            motor_name: 电机名。
+            target_position: 目标角度（度）。
+            kp: 比例增益。
+            kd: 微分增益。
         """
+        limits = self.JOINT_LIMITS.get(motor_name)
+        if limits is not None:
+            lo, hi = limits
+            target_position = lo if target_position < lo else hi if target_position > hi else target_position
+
         self.motor_targets[motor_name] = {
             "target_position": target_position,
             "kp": kp,
@@ -121,6 +132,34 @@ class T1(Robot):
                 0.0,
             ]
         )
+
+    # Booster T1 各电机关节限位（度），来自赛事规则的关节表。
+    # 键为服务器电机码（见 MOTOR_FROM_READABLE_TO_SERVER）。
+    JOINT_LIMITS: dict = {
+        "he1": (-90.0, 90.0),      # Head_yaw
+        "he2": (-20.0, 70.0),      # Head_pitch
+        "lae1": (-190.0, 70.0),    # Left_Shoulder_Pitch
+        "lae2": (-100.0, 90.0),    # Left_Shoulder_Roll
+        "lae3": (-130.0, 130.0),   # Left_Elbow_Pitch
+        "lae4": (-140.0, 0.0),     # Left_Elbow_Yaw
+        "rae1": (-190.0, 70.0),    # Right_Shoulder_Pitch
+        "rae2": (-90.0, 100.0),    # Right_Shoulder_Roll
+        "rae3": (-130.0, 130.0),   # Right_Elbow_Pitch
+        "rae4": (0.0, 140.0),      # Right_Elbow_Yaw
+        "te1": (-90.0, 90.0),      # Waist
+        "lle1": (-103.0, 90.0),    # Left_Hip_Pitch
+        "lle2": (-11.5, 90.0),     # Left_Hip_Roll
+        "lle3": (-57.3, 57.3),     # Left_Hip_Yaw
+        "lle4": (0.0, 134.0),      # Left_Knee_Pitch
+        "lle5": (-50.0, 20.0),     # Left_Ankle_Pitch
+        "lle6": (-25.0, 25.0),     # Left_Ankle_Roll
+        "rle1": (-103.0, 90.0),    # Right_Hip_Pitch
+        "rle2": (-90.0, 11.5),     # Right_Hip_Roll
+        "rle3": (-57.3, 57.3),     # Right_Hip_Yaw
+        "rle4": (0.0, 134.0),      # Right_Knee_Pitch
+        "rle5": (-50.0, 20.0),     # Right_Ankle_Pitch
+        "rle6": (-25.0, 25.0),     # Right_Ankle_Roll
+    }
 
     @property
     @override

@@ -1,94 +1,128 @@
+# 仰卧起身（机器人后仰、面朝上时使用）
+#
+# === 关键约定（务必理解后再调）===
+# 1) symmetry: true 下，KeyframeSkill 对各关节的处理：
+#    - 俯仰类（非镜像组：Hip_Pitch / Knee_Pitch / Ankle_Pitch / Shoulder_Pitch /
+#      Elbow_Pitch / Waist / Head_*）：左右电机实际角度 = -(yaml 值)。
+#      例：要膝盖弯到 +110°（范围 0~134），这里写 Knee_Pitch: -110。
+#    - 镜像类（Hip_Roll / Hip_Yaw / Ankle_Roll / Shoulder_Roll / Elbow_Yaw）：
+#      左 = +(yaml)，右 = -(yaml)。对称矢状面起身一般写 0 即可。
+# 2) 所有目标角已被 robot.py 的关节限位钳制保护，不会下发超界角度。
+# 3) ⚠️ 关节正负方向（哪边是屈/伸）我按常规假设，需在仿真里逐帧校验：
+#    若某关节动反了，把该帧该关节的 yaml 值取反即可。膝盖(Knee)范围 0~134，
+#    只能正向弯曲，方向无歧义。
+# 4) delta 为该帧持续时间（秒），按动作快慢调。
+#
+# 动作分解：仰卧settle → 团身收腿 → 撑坐 → 深蹲(重心移到脚上) → 起立 → 站立
 symmetry: true
-kp: 75
-kd: 1
+kp: 140
+kd: 2
 keyframes:
 
-  - delta: 1
+  # 帧0：仰卧稳定，手臂置于体侧准备支撑（膝微屈）
+  - delta: 0.3
     motor_positions:
-      Head_yaw: 0.000
-      Head_pitch: 0.000
-      Shoulder_Pitch: -114.592
-      Shoulder_Roll: -71.619
-      Elbow_Pitch: -85.944
-      Elbow_Yaw: -171.887
-      Waist: 0.000
-      Hip_Pitch: -45.836
-      Hip_Roll: 179.908
-      Hip_Yaw: 179.908
-      Knee_Pitch: -179.908
-      Ankle_Pitch: 89.954
-      Ankle_Roll: 89.954
-    kp: 250
-    kd: 1
-    p_gains:
-      Hip_Pitch: 20
-      Hip_Roll: 20
-      Hip_Yaw: 20
-      Knee_Pitch: 20
-    d_gains:
-      Hip_Pitch: 1
-      Hip_Roll: 1
-      Hip_Yaw: 1
-      Knee_Pitch: 1
+      Head_yaw: 0.0
+      Head_pitch: 0.0
+      Shoulder_Pitch: 0.0       # 肩 0°
+      Shoulder_Roll: -20.0      # 左肩 -20°/右肩 +20°，手臂略外展贴地
+      Elbow_Pitch: -60.0        # 肘弯 +60°
+      Elbow_Yaw: 0.0
+      Waist: 0.0
+      Hip_Pitch: 0.0            # 髋 0°
+      Hip_Roll: 0.0
+      Hip_Yaw: 0.0
+      Knee_Pitch: -30.0         # 膝弯 +30°
+      Ankle_Pitch: 0.0
+      Ankle_Roll: 0.0
 
-  - delta: 0.8125
+  # 帧1：团身——强屈髋把腿收向胸口，深屈膝让脚跟靠近臀部，踝背屈准备踏地
+  - delta: 0.7
     motor_positions:
-      Head_yaw: 0.000
-      Head_pitch: 0.000
-      Shoulder_Pitch: -114.592
-      Shoulder_Roll: -89.954
-      Elbow_Pitch: -85.944
-      Elbow_Yaw: 0.000
-      Waist: 0.000
-      Hip_Pitch: -45.836
-      Hip_Roll: 179.908
-      Hip_Yaw: 179.908
-      Knee_Pitch: -179.908
-      Ankle_Pitch: 63.026
-      Ankle_Roll: 45.836
-    p_gains:
-      Hip_Pitch: 25
-      Hip_Roll: 25
-      Hip_Yaw: 25
-      Knee_Pitch: 25
+      Head_yaw: 0.0
+      Head_pitch: 0.0
+      Shoulder_Pitch: 40.0      # 肩 -40°，手臂向下压地
+      Shoulder_Roll: -20.0
+      Elbow_Pitch: -90.0        # 肘弯 +90°
+      Elbow_Yaw: 0.0
+      Waist: 0.0
+      Hip_Pitch: -80.0          # 髋屈 +80°
+      Hip_Roll: 0.0
+      Hip_Yaw: 0.0
+      Knee_Pitch: -120.0        # 膝弯 +120°
+      Ankle_Pitch: 20.0         # 踝 -20°（背屈，脚掌朝胫骨）
+      Ankle_Roll: 0.0
 
+  # 帧2：撑坐——手臂向后撑把上身顶起，脚掌踏实，朝坐姿/蹲姿过渡
+  - delta: 0.7
+    motor_positions:
+      Head_yaw: 0.0
+      Head_pitch: 0.0
+      Shoulder_Pitch: -30.0     # 肩 +30°，手臂前摆助平衡
+      Shoulder_Roll: -20.0
+      Elbow_Pitch: -40.0
+      Elbow_Yaw: 0.0
+      Waist: 0.0
+      Hip_Pitch: -55.0          # 髋屈 +55°
+      Hip_Roll: 0.0
+      Hip_Yaw: 0.0
+      Knee_Pitch: -115.0        # 膝弯 +115°
+      Ankle_Pitch: 25.0         # 踝 -25°
+      Ankle_Roll: 0.0
 
-
+  # 帧3：深蹲——重心压到双脚上方，手臂前伸配平（腿部用大力）
   - delta: 0.6
-    motor_positions:
-      Head_yaw: 0.000
-      Head_pitch: 0.000
-      Shoulder_Pitch: 89.954
-      Shoulder_Roll: -89.954
-      Elbow_Pitch: 0.000
-      Elbow_Yaw: 0.000
-      Waist: 0.000
-      Hip_Pitch: 20.054
-      Hip_Roll: 11.459
-      Hip_Yaw: 0.000
-      Knee_Pitch: -42.971
-      Ankle_Pitch: 57.296
-      Ankle_Roll: 0.000
-    kp: 40
-    kd: 4
-    p_gains:
-       Ankle_Pitch: 100
-       Ankle_Roll: 100
-
-  - delta: 0.25
-    motor_positions:
-      Head_yaw: 0.000
-      Head_pitch: 0.000
-      Shoulder_Pitch: 0.000
-      Shoulder_Roll: -77.363
-      Elbow_Pitch: -85.944
-      Elbow_Yaw: 0.000
-      Waist: 0.000
-      Hip_Pitch: 20.054
-      Hip_Roll: 7.162
-      Hip_Yaw: 0.000
-      Knee_Pitch: -42.971
-      Ankle_Pitch: 0.000
-      Ankle_Roll: 0.000
     kp: 200
-    kd: 3.5
+    kd: 3
+    motor_positions:
+      Head_yaw: 0.0
+      Head_pitch: 0.0
+      Shoulder_Pitch: -40.0     # 肩 +40°前伸配平
+      Shoulder_Roll: -20.0
+      Elbow_Pitch: 0.0
+      Elbow_Yaw: 0.0
+      Waist: 0.0
+      Hip_Pitch: -50.0          # 髋屈 +50°
+      Hip_Roll: 0.0
+      Hip_Yaw: 0.0
+      Knee_Pitch: -120.0        # 膝弯 +120°（深蹲）
+      Ankle_Pitch: 30.0         # 踝 -30°（胫骨前倾过脚掌）
+      Ankle_Roll: 0.0
+
+  # 帧4：起立——同时伸髋伸膝、踝回中，缓慢站起
+  - delta: 0.6
+    kp: 200
+    kd: 3
+    motor_positions:
+      Head_yaw: 0.0
+      Head_pitch: 0.0
+      Shoulder_Pitch: -10.0
+      Shoulder_Roll: -40.0
+      Elbow_Pitch: 0.0
+      Elbow_Yaw: 0.0
+      Waist: 0.0
+      Hip_Pitch: -20.0          # 髋屈 +20°
+      Hip_Roll: 0.0
+      Hip_Yaw: 0.0
+      Knee_Pitch: -50.0         # 膝弯 +50°
+      Ankle_Pitch: 10.0         # 踝 -10°
+      Ankle_Roll: 0.0
+
+  # 帧5：站立中性姿态（随后 GetUp 会接管做 Neutral/Walk 过渡）
+  - delta: 0.5
+    kp: 150
+    kd: 2
+    motor_positions:
+      Head_yaw: 0.0
+      Head_pitch: 0.0
+      Shoulder_Pitch: 0.0
+      Shoulder_Roll: -89.954    # 与 neutral 站姿一致
+      Elbow_Pitch: 0.0
+      Elbow_Yaw: 0.0
+      Waist: 0.0
+      Hip_Pitch: 0.0
+      Hip_Roll: 0.0
+      Hip_Yaw: 0.0
+      Knee_Pitch: 0.0
+      Ankle_Pitch: 0.0
+      Ankle_Roll: 0.0
