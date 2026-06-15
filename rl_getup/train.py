@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from getup_env import GetUpEnv
 
 from stable_baselines3 import PPO
-from stable_baselines3.common.vec_env import SubprocVecEnv
+from stable_baselines3.common.vec_env import SubprocVecEnv, VecMonitor
 from stable_baselines3.common.callbacks import CheckpointCallback
 
 
@@ -31,6 +31,7 @@ def main():
     args = ap.parse_args()
 
     env = SubprocVecEnv([make_env(i) for i in range(args.n_envs)])
+    env = VecMonitor(env)  # 记录每回合回报，使日志出现 rollout/ep_rew_mean
     model = PPO(
         "MlpPolicy", env,
         n_steps=2048, batch_size=2048, gae_lambda=0.95, gamma=0.99,
@@ -40,7 +41,7 @@ def main():
     )
     ckpt = CheckpointCallback(save_freq=max(1, 200_000 // args.n_envs),
                               save_path=os.path.dirname(args.out), name_prefix="getup_ckpt")
-    model.learn(total_timesteps=args.steps, callback=ckpt, progress_bar=True)
+    model.learn(total_timesteps=args.steps, callback=ckpt)
     model.save(args.out)
     print(f"已保存策略: {args.out}.zip")
     print("下一步：导出 onnx -> rl_getup/export_onnx.py")
