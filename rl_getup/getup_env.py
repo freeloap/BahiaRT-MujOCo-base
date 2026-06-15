@@ -73,7 +73,7 @@ N = len(MOTORS)
 STAND_HEIGHT = 0.62      # 站立目标躯干高度（m）
 KP, KD = 200.0, 5.0      # PD 增益（部署的 GetUpRL 技能须用同值）
 CTRL_DT = 0.02           # 控制周期（s）=> 每个动作步进 4 个 0.005 仿真步
-EP_TIME = 6.0            # 每回合时长（s）
+EP_TIME = 8.0            # 每回合时长（s）
 
 
 class GetUpEnv(_Base):
@@ -154,11 +154,11 @@ class GetUpEnv(_Base):
         if seed is not None:
             self.rng = np.random.default_rng(seed)
         mujoco.mj_resetData(self.model, self.data)
-        if self.rng.random() < 0.5:
-            # 参考态初始化：直立躯干 + 随机蹲深（c=0 站直 ~ c=1 深蹲），
-            # 覆盖「站立↔深蹲」整个高度段，密集训练"蹲→站"这一跃；
-            # 价值函数再把「站起=高分且可达」反传到倒地状态。
-            c = float(self.rng.random())
+        if self.rng.random() < 0.6:
+            # 参考态初始化：直立躯干 + 随机蹲深（c=0 站直 ~ c=1 深蹲）。
+            # c 偏向小值(平方分布)=渐进式课程：多数从浅蹲/近站立起步，先把"最后站直
+            # 一下"练熟，价值再反传到深蹲与倒地。
+            c = float(self.rng.random()) ** 2
             crouch = np.zeros(N)
             for m, v in (("lle1", -1.0), ("rle1", -1.0), ("lle4", 1.6), ("rle4", 1.6),
                          ("lle5", -0.6), ("rle5", -0.6)):
