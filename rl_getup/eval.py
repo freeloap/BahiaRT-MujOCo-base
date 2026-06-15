@@ -27,7 +27,7 @@ def main():
     ok = 0
     hs, ups = [], []
     for ep in range(args.episodes):
-        obs, _ = env.reset()
+        obs, _ = env.reset(options={"fallen": True})  # 只从倒地起步，测真起身
         done = False
         while not done:
             action, _ = model.predict(obs, deterministic=True)

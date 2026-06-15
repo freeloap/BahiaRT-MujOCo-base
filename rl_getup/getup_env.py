@@ -154,11 +154,11 @@ class GetUpEnv(_Base):
         if seed is not None:
             self.rng = np.random.default_rng(seed)
         mujoco.mj_resetData(self.model, self.data)
-        if self.rng.random() < 0.6:
-            # 参考态初始化：直立躯干 + 随机蹲深（c=0 站直 ~ c=1 深蹲）。
-            # c 偏向小值(平方分布)=渐进式课程：多数从浅蹲/近站立起步，先把"最后站直
-            # 一下"练熟，价值再反传到深蹲与倒地。
-            c = float(self.rng.random()) ** 2
+        force_fallen = bool(options and options.get("fallen"))  # 评估真起身用：强制倒地起步
+        if (not force_fallen) and self.rng.random() < 0.5:
+            # 参考态初始化：直立躯干 + 随机蹲深（c=0 站直 ~ c=1 深蹲），均匀覆盖
+            # 全高度段，兼顾"蹲→站"各深度；与倒地起步各占一半，两段都练到。
+            c = float(self.rng.random())
             crouch = np.zeros(N)
             for m, v in (("lle1", -1.0), ("rle1", -1.0), ("lle4", 1.6), ("rle4", 1.6),
                          ("lle5", -0.6), ("rle5", -0.6)):

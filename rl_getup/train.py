@@ -35,7 +35,7 @@ def main():
     model = PPO(
         "MlpPolicy", env,
         n_steps=2048, batch_size=2048, gae_lambda=0.95, gamma=0.99,
-        learning_rate=3e-4, ent_coef=0.004, n_epochs=5,
+        learning_rate=3e-4, ent_coef=0.01, n_epochs=5,
         policy_kwargs=dict(net_arch=[256, 256]),
         verbose=1,
     )
