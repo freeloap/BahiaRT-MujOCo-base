@@ -177,12 +177,15 @@ class GetUpEnv(_Base):
         h = float(self.data.qpos[2])
         pg = self._proj_gravity()
         upright = float(-pg[2])                 # 直立时 ≈ +1
-        r_up = upright
-        r_h = min(h / STAND_HEIGHT, 1.0)
-        r_stand = 1.0 if (h > 0.5 and upright > 0.9) else 0.0
+        h_frac = min(h / STAND_HEIGHT, 1.0)
+        upright01 = max(0.0, upright)
+        # 关键：直立必须「配合站高」才给分（乘积），杜绝"蹲着保持竖直"的偷懒局部最优
+        r_posture = upright01 * h_frac
+        r_tall = h_frac                          # 额外直接鼓励站高
+        r_stand = 1.0 if (h > 0.5 and upright > 0.9) else 0.0   # 真站起来的大额奖励
         r_ctrl = -0.001 * float(np.sum(action ** 2))
         r_smooth = -0.0005 * float(np.sum(self.data.qvel[self.dadr] ** 2))
-        reward = 1.5 * r_up + 1.0 * r_h + 2.0 * r_stand + r_ctrl + r_smooth + 0.1
+        reward = 3.0 * r_posture + 1.0 * r_tall + 3.0 * r_stand + r_ctrl + r_smooth + 0.05
 
         terminated = False
         truncated = self.t >= self.max_steps
