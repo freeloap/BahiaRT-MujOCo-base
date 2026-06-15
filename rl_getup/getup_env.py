@@ -150,15 +150,22 @@ class GetUpEnv(_Base):
         if seed is not None:
             self.rng = np.random.default_rng(seed)
         mujoco.mj_resetData(self.model, self.data)
-        if self.rng.random() < 0.4:
-            # 课程式：40% 回合从「站立附近」开始，先学会站立保持平衡，
-            # 价值函数再把「站立=高分且可达」反传到倒地状态，破解"深蹲偷懒"局部最优。
-            self.data.qpos[2] = 0.62
+        if self.rng.random() < 0.5:
+            # 参考态初始化：直立躯干 + 随机蹲深（c=0 站直 ~ c=1 深蹲），
+            # 覆盖「站立↔深蹲」整个高度段，密集训练"蹲→站"这一跃；
+            # 价值函数再把「站起=高分且可达」反传到倒地状态。
+            c = float(self.rng.random())
+            crouch = np.zeros(N)
+            for m, v in (("lle1", -1.0), ("rle1", -1.0), ("lle4", 1.6), ("rle4", 1.6),
+                         ("lle5", -0.6), ("rle5", -0.6)):
+                crouch[MOTORS.index(m)] = v * c          # 屈髋负/屈膝正/踝背屈负
+            crouch = np.clip(crouch, self.jlo, self.jhi)
+            self.data.qpos[2] = 0.62 - 0.30 * c
             self.data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]            # 躯干直立
-            self.data.qpos[self.qadr] = self.rng.uniform(-0.1, 0.1, N)
+            self.data.qpos[self.qadr] = crouch + self.rng.uniform(-0.05, 0.05, N)
             mujoco.mj_forward(self.model, self.data)
-            for _ in range(40):
-                self._apply_pd(np.zeros(N)); mujoco.mj_step(self.model, self.data)
+            for _ in range(60):  # 保持蹲姿落定
+                self._apply_pd(crouch); mujoco.mj_step(self.model, self.data)
         else:
             # 倒地姿态：绕 y 转 ±90°(俯/仰卧) 或侧卧，落地稳定
             mode = self.rng.integers(0, 3)
