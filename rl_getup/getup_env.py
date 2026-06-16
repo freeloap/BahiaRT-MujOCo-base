@@ -2,12 +2,12 @@
 
 物理：服务器自带的 T1 MuJoCo 模型 + 地面，步长 0.005s。
 控制：复刻服务器 PD —— torque = kp*(target_rad - q) - kd*dq，按 actuatorfrcrange 限幅。
-观测/动作：刻意只用「部署时 agent 真能拿到/下发」的量，保证训练出的策略可直接接回比赛：
-  - 观测(75)= 关节角(23) + 关节速(23) + 躯干重力投影(3) + 躯干角速度(3) + 上一步动作(23)
-  - 动作(23)= 每个关节的目标角，[-1,1] 线性映射到该关节限位
-起身奖励：直立 + 升高 + 站立bonus − 能耗/抖动。
+观测(75) = 关节角(23) + 关节速*0.1(23) + 躯干重力投影(3) + 躯干角速度*0.25(3) + 上一步动作(23)
+动作(23) = 每关节目标角，action=0->0弧度(站立)、±1->触及限位。
 
-核心 reset/step 只依赖 mujoco+numpy（可单独测试）；若装了 gymnasium 则暴露标准 Env 接口。
+核心思路（参考 HoST 2025）：训练初期给躯干一个**向上助力**帮它够到站立、拿到站立
+奖励，再随训练**退火到 0**，破解"站立动态不稳、RL 探索不到"的死结（如同扶着婴儿学站）。
+发现期几乎不加平滑惩罚（参考 HumanUP：先发现能起来的动作，再谈平滑）。
 """
 import os
 import numpy as np
@@ -24,16 +24,10 @@ except Exception:
 
 
 def _robot_xml():
-    """定位 T1 模型 robot.xml。
-
-    优先用环境变量 T1_ROBOT_XML；否则尝试 import rcsssmj（若该 venv 装了）；
-    最后回退到已知的 pipx 安装路径 glob。这样训练 venv 不必安装 rcsssmj。
-    """
-    # 1) 环境变量显式指定
+    """定位 T1 模型 robot.xml（环境变量 > import rcsssmj > pipx 路径 glob）。"""
     env_path = os.environ.get("T1_ROBOT_XML")
     if env_path and os.path.exists(env_path):
         return env_path
-    # 2) 若当前 venv 恰好装了 rcsssmj
     try:
         import rcsssmj
         p = os.path.join(os.path.dirname(rcsssmj.__file__), "resources", "robots", "T1", "robot.xml")
@@ -41,24 +35,18 @@ def _robot_xml():
             return p
     except Exception:
         pass
-    # 3) 回退：在 pipx/常见 site-packages 里搜
     import glob
-    patterns = [
+    for pat in [
         os.path.expanduser("~/.local/share/pipx/venvs/*/lib/python*/site-packages/rcsssmj/resources/robots/T1/robot.xml"),
         os.path.expanduser("~/.local/lib/python*/site-packages/rcsssmj/resources/robots/T1/robot.xml"),
         "/usr/lib/python*/site-packages/rcsssmj/resources/robots/T1/robot.xml",
-    ]
-    for pat in patterns:
+    ]:
         hits = glob.glob(pat)
         if hits:
             return hits[0]
-    raise FileNotFoundError(
-        "找不到 T1 robot.xml。请设置环境变量 T1_ROBOT_XML 指向 rcsssmj 的 "
-        "resources/robots/T1/robot.xml，或在本 venv 安装 rcsssmj。"
-    )
+    raise FileNotFoundError("找不到 T1 robot.xml；请设 T1_ROBOT_XML 或安装 rcsssmj。")
 
 
-# 服务器电机码顺序（动作/观测的关节顺序，与 robot.py ROBOT_MOTORS 一致）
 MOTORS = ["he1","he2","lae1","lae2","lae3","lae4","rae1","rae2","rae3","rae4","te1",
           "lle1","lle2","lle3","lle4","lle5","lle6","rle1","rle2","rle3","rle4","rle5","rle6"]
 MOTOR2JOINT = {
@@ -68,46 +56,14 @@ MOTOR2JOINT = {
     "lle1":"Left_Hip_Pitch","lle2":"Left_Hip_Roll","lle3":"Left_Hip_Yaw","lle4":"Left_Knee_Pitch","lle5":"Left_Ankle_Pitch","lle6":"Left_Ankle_Roll",
     "rle1":"Right_Hip_Pitch","rle2":"Right_Hip_Roll","rle3":"Right_Hip_Yaw","rle4":"Right_Knee_Pitch","rle5":"Right_Ankle_Pitch","rle6":"Right_Ankle_Roll",
 }
-
 N = len(MOTORS)
 STAND_HEIGHT = 0.62      # 站立目标躯干高度（m）
 KP, KD = 200.0, 5.0      # PD 增益（部署的 GetUpRL 技能须用同值）
-CTRL_DT = 0.02           # 控制周期（s）=> 每个动作步进 4 个 0.005 仿真步
+CTRL_DT = 0.02           # 控制周期（s）=> 每动作步进 4 个 0.005 仿真步
 EP_TIME = 8.0            # 每回合时长（s）
-REF_DURATION = 3.5       # 参考起身动作时长（s）；phase 在此时间内 0->1，之后保持站立
-
-# ===== 参考起身动作（DeepMimic 思路）=====
-# 关键相位的腿部姿态(弧度)：屈髋=负 Hip_Pitch、屈膝=正 Knee、踝背屈=负 Ankle。
-# 仅约束腿部矢状面与躯干俯仰/高度（其余关节由策略自由发挥做平衡）。
-REF_PHASES = np.array([0.0, 0.25, 0.50, 0.75, 1.0])
-REF_LEGS = np.array([            # [hip_pitch, knee, ankle_pitch]（双腿对称）
-    [0.0,  0.0,  0.0],           # 仰卧：腿伸直
-    [-1.4, 1.9, -0.3],           # 团身：屈髋屈膝把腿收向胸口
-    [-1.0, 1.6, -0.5],           # 深蹲：脚收到身下、躯干直立
-    [-0.5, 0.9, -0.3],           # 起立中
-    [0.0,  0.0,  0.0],           # 站直
-])
-REF_HEIGHT = np.array([0.20, 0.25, 0.35, 0.50, 0.62])   # 参考躯干高度
-REF_PITCH = np.array([90.0, 70.0, 20.0, 5.0, 0.0])      # 参考躯干俯仰(度)：仰卧90->直立0
-# 腿部关节在 MOTORS 中的下标
-_HIP = (MOTORS.index("lle1"), MOTORS.index("rle1"))
-_KNEE = (MOTORS.index("lle4"), MOTORS.index("rle4"))
-_ANK = (MOTORS.index("lle5"), MOTORS.index("rle5"))
-
-
-def ref_pose(phase):
-    """返回参考相位的 (全23维目标弧度, 参考高度, 参考俯仰度)。"""
-    p = float(np.clip(phase, 0.0, 1.0))
-    hip = np.interp(p, REF_PHASES, REF_LEGS[:, 0])
-    knee = np.interp(p, REF_PHASES, REF_LEGS[:, 1])
-    ank = np.interp(p, REF_PHASES, REF_LEGS[:, 2])
-    q = np.zeros(N)
-    for i in _HIP: q[i] = hip
-    for i in _KNEE: q[i] = knee
-    for i in _ANK: q[i] = ank
-    h = float(np.interp(p, REF_PHASES, REF_HEIGHT))
-    pitch = float(np.interp(p, REF_PHASES, REF_PITCH))
-    return q, h, pitch
+# 垂直助力课程：初期给躯干向上力(N)，按"每环境步数"退火到 0
+ASSIST_MAX = 220.0       # 初始向上助力（约 2/3 体重）
+ASSIST_ANNEAL = 600_000  # 每个环境实例训练到此步数时助力归零（16 env ≈ 全局 1000 万步）
 
 
 class GetUpEnv(_Base):
@@ -123,14 +79,12 @@ class GetUpEnv(_Base):
         self.max_steps = int(EP_TIME / CTRL_DT)
         self.prev_action = np.zeros(N)
         self.t = 0
-        self.phase = 0.0
-        self.dphase = CTRL_DT / REF_DURATION
+        self.total = 0          # 本环境累计步数（用于助力退火）
         if _HAS_GYM:
             self.action_space = spaces.Box(-1.0, 1.0, (N,), np.float32)
-            hi = np.full(76, np.inf, np.float32)
-            self.observation_space = spaces.Box(-hi, hi, (76,), np.float32)
+            hi = np.full(75, np.inf, np.float32)
+            self.observation_space = spaces.Box(-hi, hi, (75,), np.float32)
 
-    # ---------- 建模 ----------
     def _build(self):
         spec = mujoco.MjSpec.from_file(_robot_xml())
         spec.option.timestep = 0.005
@@ -152,24 +106,20 @@ class GetUpEnv(_Base):
                 self.frclo[i], self.frchi[i] = self.model.jnt_actfrcrange[jid]
             else:
                 self.frclo[i], self.frchi[i] = -1e6, 1e6
-        # 动作幅度：每关节取 max(|lo|,|hi|)，使 action=0->0 弧度(站立)、±1 触及限位
         self.scale = np.maximum(np.abs(self.jlo), np.abs(self.jhi))
         self.torso_bid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "torso")
 
     # ---------- 物理/控制 ----------
-    def _apply_pd(self, target_rad):
+    def _apply_pd(self, target_rad, assist=0.0):
         q = self.data.qpos[self.qadr]; dq = self.data.qvel[self.dadr]
-        tau = KP * (target_rad - q) - KD * dq
-        tau = np.clip(tau, self.frclo, self.frchi)
+        tau = np.clip(KP * (target_rad - q) - KD * dq, self.frclo, self.frchi)
         self.data.qfrc_applied[self.dadr] = tau
+        self.data.qfrc_applied[2] = assist   # 根 freejoint 的 z 平移自由度 = 世界向上力
 
     def _action_to_target(self, a):
-        # action=0 -> 关节 0 弧度（站立姿态），±1 -> 触及该关节较远的限位。
-        # 这样"站立"是默认动作，蹲下需主动出力，避免动作参数化把策略带向蹲姿。
         a = np.clip(a, -1, 1)
         return np.clip(a * self.scale, self.jlo, self.jhi)
 
-    # ---------- 观测 ----------
     def _proj_gravity(self):
         R = self.data.xmat[self.torso_bid].reshape(3, 3)
         return R.T @ np.array([0.0, 0.0, -1.0])
@@ -179,41 +129,39 @@ class GetUpEnv(_Base):
         return R.T @ self.data.qvel[3:6]
 
     def _obs(self):
-        q = self.data.qpos[self.qadr]
-        dq = self.data.qvel[self.dadr]
-        qn = 2 * (q - self.jlo) / (self.jhi - self.jlo) - 1  # 归一化到 [-1,1]
+        q = self.data.qpos[self.qadr]; dq = self.data.qvel[self.dadr]
+        qn = 2 * (q - self.jlo) / (self.jhi - self.jlo) - 1
         return np.concatenate([qn, dq * 0.1, self._proj_gravity(), self._ang_vel_torso() * 0.25,
-                               self.prev_action, [self.phase]]).astype(np.float32)
+                               self.prev_action]).astype(np.float32)
 
     # ---------- reset ----------
     def reset(self, *, seed=None, options=None):
         if seed is not None:
             self.rng = np.random.default_rng(seed)
         mujoco.mj_resetData(self.model, self.data)
-        force_fallen = bool(options and options.get("fallen"))  # 评估真起身用：强制倒地起步
+        force_fallen = bool(options and options.get("fallen"))
         if (not force_fallen) and self.rng.random() < 0.5:
-            # 参考态初始化(RSI)：沿参考起身轨迹随机相位起步，按该相位摆好腿部姿态、
-            # 躯干俯仰与高度，使策略在整条轨迹上都得到训练（DeepMimic 标准做法）。
-            p = float(self.rng.random())
-            self.phase = p
-            qref, href, pitch = ref_pose(p)
-            rad = np.radians(pitch)  # 躯干绕 y 轴俯仰
-            self.data.qpos[2] = href + 0.05
-            self.data.qpos[3:7] = [np.cos(rad / 2), 0.0, np.sin(rad / 2), 0.0]
-            self.data.qpos[self.qadr] = np.clip(qref, self.jlo, self.jhi) + self.rng.uniform(-0.04, 0.04, N)
+            # 参考态：直立躯干 + 随机蹲深，均匀覆盖站立↔深蹲
+            c = float(self.rng.random())
+            crouch = np.zeros(N)
+            for m, v in (("lle1", -1.0), ("rle1", -1.0), ("lle4", 1.6), ("rle4", 1.6),
+                         ("lle5", -0.6), ("rle5", -0.6)):
+                crouch[MOTORS.index(m)] = v * c
+            crouch = np.clip(crouch, self.jlo, self.jhi)
+            self.data.qpos[2] = 0.62 - 0.30 * c
+            self.data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
+            self.data.qpos[self.qadr] = crouch + self.rng.uniform(-0.05, 0.05, N)
             mujoco.mj_forward(self.model, self.data)
-            for _ in range(40):  # 落定
-                self._apply_pd(np.clip(qref, self.jlo, self.jhi)); mujoco.mj_step(self.model, self.data)
+            for _ in range(60):
+                self._apply_pd(crouch); mujoco.mj_step(self.model, self.data)
         else:
-            # 倒地姿态：绕 y 转 ±90°(俯/仰卧) 或侧卧，落地稳定；phase 从 0 起
-            self.phase = 0.0
             mode = self.rng.integers(0, 3)
             s = {0: [0.7071, 0, -0.7071, 0], 1: [0.7071, 0, 0.7071, 0], 2: [0.7071, 0.7071, 0, 0]}[int(mode)]
             self.data.qpos[2] = 0.35
             self.data.qpos[3:7] = s
             self.data.qpos[self.qadr] = self.rng.uniform(self.jlo, self.jhi) * 0.1
             mujoco.mj_forward(self.model, self.data)
-            for _ in range(120):  # 0.6s 落地
+            for _ in range(120):
                 self._apply_pd(np.zeros(N)); mujoco.mj_step(self.model, self.data)
         self.prev_action = np.zeros(N)
         self.t = 0
@@ -223,50 +171,41 @@ class GetUpEnv(_Base):
     def step(self, action):
         action = np.asarray(action, np.float32)
         target = self._action_to_target(action)
+        # 垂直助力（随训练退火到 0）
+        assist = ASSIST_MAX * max(0.0, 1.0 - self.total / ASSIST_ANNEAL)
         for _ in range(self.n_sub):
-            self._apply_pd(target)
+            self._apply_pd(target, assist=assist)
             mujoco.mj_step(self.model, self.data)
         self.prev_action = action
         self.t += 1
-        self.phase = min(1.0, self.phase + self.dphase)   # 推进参考相位
+        self.total += 1
 
         h = float(self.data.qpos[2])
         pg = self._proj_gravity()
-        upright = float(-pg[2])                 # 直立时 ≈ +1
+        upright = float(-pg[2])
         h_frac = min(h / STAND_HEIGHT, 1.0)
         upright01 = max(0.0, upright)
-
-        # 模仿奖励：当前腿部姿态贴合参考相位姿态（DeepMimic 核心，引导探索沿起身轨迹）
-        qref, _, _ = ref_pose(self.phase)
-        leg_idx = list(_HIP) + list(_KNEE) + list(_ANK)
-        leg_err = float(np.mean((self.data.qpos[self.qadr][leg_idx] - qref[leg_idx]) ** 2))
-        r_imit = float(np.exp(-3.0 * leg_err))           # ~1 完全贴合
-
-        # 任务奖励：真正站高+直立（确保不是只摆姿势，而是真平衡站起来）
         r_posture = 1.5 * upright01 * h_frac
         ramp = float(np.clip((h - 0.40) / (0.58 - 0.40), 0.0, 1.0))
-        r_stand = 4.0 * ramp * upright01
-        r_ctrl = -0.001 * float(np.sum(action ** 2))
-        r_smooth = -0.0005 * float(np.sum(self.data.qvel[self.dadr] ** 2))
-        reward = 2.0 * r_imit + r_posture + r_stand + r_ctrl + r_smooth + 0.05
+        r_stand = 6.0 * ramp * upright01
+        # 发现期几乎不惩罚抖动/能耗（参考 HumanUP：先发现能起来的动作）
+        r_smooth = -0.00005 * float(np.sum(self.data.qvel[self.dadr] ** 2))
+        reward = r_posture + r_stand + r_smooth + 0.05
 
         terminated = False
         truncated = self.t >= self.max_steps
-        info = {"h": h, "upright": upright, "phase": self.phase}
+        info = {"h": h, "upright": upright, "assist": assist}
         return self._obs(), float(reward), terminated, truncated, info
 
 
-# 不依赖 gymnasium 的快速自测
 if __name__ == "__main__":
     env = GetUpEnv()
     obs, _ = env.reset()
-    print("观测维度:", obs.shape, " 动作维度:", N, " 每回合步数:", env.max_steps, " 子步/动作:", env.n_sub)
+    print("观测维度:", obs.shape, " 动作:", N, " 步/回合:", env.max_steps, " 初始助力:", round(ASSIST_MAX, 0), "N")
     tot = 0.0
     for i in range(env.max_steps):
-        obs, r, term, trunc, info = env.step(env.rng.uniform(-1, 1, N))
-        tot += r
-        if i % 50 == 0:
-            print(f"  step {i:3d}  高度={info['h']:.3f}  直立={info['upright']:+.2f}  reward={r:.2f}")
-        if term or trunc:
-            break
-    print(f"随机策略回合总回报={tot:.1f}（应该很低；训练后应显著上升并学会站起）")
+        obs, r, te, tr, info = env.step(env.rng.uniform(-1, 1, N)); tot += r
+        if i % 80 == 0:
+            print(f"  step {i:3d} 高={info['h']:.3f} 直立={info['upright']:+.2f} 助力={info['assist']:.0f}N r={r:.2f}")
+        if te or tr: break
+    print(f"随机回合总回报={tot:.1f}")
