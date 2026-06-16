@@ -29,13 +29,16 @@ def main():
     ap.add_argument("--n-envs", type=int, default=8, help="并行环境数")
     ap.add_argument("--out", type=str, default=os.path.join(os.path.dirname(__file__), "getup_ppo"))
     ap.add_argument("--resume", type=str, default=None, help="从已有模型续训（如 rl_getup/getup_ppo.zip）")
+    ap.add_argument("--lr", type=float, default=3e-4, help="学习率（精修续训建议 1e-4）")
     args = ap.parse_args()
 
     env = SubprocVecEnv([make_env(i) for i in range(args.n_envs)])
     env = VecMonitor(env)  # 记录每回合回报，使日志出现 rollout/ep_rew_mean
     if args.resume:
         model = PPO.load(args.resume, env=env)
-        print(f"从 {args.resume} 续训")
+        model.learning_rate = args.lr
+        model.lr_schedule = lambda _: args.lr
+        print(f"从 {args.resume} 续训，lr={args.lr}")
     else:
         model = PPO(
             "MlpPolicy", env,

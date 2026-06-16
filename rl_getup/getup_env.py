@@ -192,11 +192,14 @@ class GetUpEnv(_Base):
         h_frac = min(h / STAND_HEIGHT, 1.0)
         upright01 = max(0.0, upright)
         r_posture = 1.5 * upright01 * h_frac
-        ramp = float(np.clip((h - 0.40) / (0.58 - 0.40), 0.0, 1.0))
+        # 精修：站立 ramp 门槛抬到 0.50~0.60m，逼它站到接近完全直立才拿满分（更稳更高）
+        ramp = float(np.clip((h - 0.50) / (0.60 - 0.50), 0.0, 1.0))
         r_stand = 6.0 * ramp * upright01
-        # 发现期几乎不惩罚抖动/能耗（参考 HumanUP：先发现能起来的动作）
-        r_smooth = -0.00005 * float(np.sum(self.data.qvel[self.dadr] ** 2))
-        reward = r_posture + r_stand + r_smooth + 0.05
+        # 站稳加成：高且直立时额外奖励，鼓励稳定保持而非站起即倒
+        r_stable = 2.0 if (h > 0.58 and upright > 0.93) else 0.0
+        # 精修期稍增平滑惩罚，让起身动作更干净（不抖）
+        r_smooth = -0.0002 * float(np.sum(self.data.qvel[self.dadr] ** 2))
+        reward = r_posture + r_stand + r_stable + r_smooth + 0.05
 
         terminated = False
         truncated = self.t >= self.max_steps
