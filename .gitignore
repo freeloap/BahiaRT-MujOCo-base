@@ -16,3 +16,4 @@ rl_getup/.venv_rl/
 rl_getup/getup_ckpt_*.zip
 rl_getup/ckpt/
 rl_getup/tb/
+rl_getup/getup_ppo.zip
