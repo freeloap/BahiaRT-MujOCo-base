@@ -61,9 +61,11 @@ STAND_HEIGHT = 0.62      # 站立目标躯干高度（m）
 KP, KD = 200.0, 5.0      # PD 增益（部署的 GetUpRL 技能须用同值）
 CTRL_DT = 0.02           # 控制周期（s）=> 每动作步进 4 个 0.005 仿真步
 EP_TIME = 8.0            # 每回合时长（s）
-# 垂直助力课程：初期给躯干向上力(N)，按"每环境步数"退火到 0
-ASSIST_MAX = 220.0       # 初始向上助力（约 2/3 体重）
-ASSIST_ANNEAL = 600_000  # 每个环境实例训练到此步数时助力归零（16 env ≈ 全局 1000 万步）
+# 垂直助力课程（弹性支撑式）：向上力 = scale * min(K*(站立高-当前高), FMAX)，
+# 越低支撑越大、到站立高归零 => 在"站立"处形成稳定吸引子；scale 随训练退火到 0。
+ASSIST_K = 900.0         # 支撑刚度（N/m）
+ASSIST_FMAX = 320.0      # 支撑力上限（N，约体重）
+ASSIST_ANNEAL = 700_000  # 每环境步数退火到 0（16 env ≈ 全局 1100 万步）
 
 
 class GetUpEnv(_Base):
@@ -171,11 +173,14 @@ class GetUpEnv(_Base):
     def step(self, action):
         action = np.asarray(action, np.float32)
         target = self._action_to_target(action)
-        # 垂直助力（随训练退火到 0）
-        assist = ASSIST_MAX * max(0.0, 1.0 - self.total / ASSIST_ANNEAL)
+        # 弹性支撑助力（随训练退火）：越低于站立高度支撑越大、到站立高归零
+        assist_scale = max(0.0, 1.0 - self.total / ASSIST_ANNEAL)
         for _ in range(self.n_sub):
-            self._apply_pd(target, assist=assist)
+            h_now = float(self.data.qpos[2])
+            support = min(ASSIST_K * max(0.0, STAND_HEIGHT - h_now), ASSIST_FMAX)
+            self._apply_pd(target, assist=assist_scale * support)
             mujoco.mj_step(self.model, self.data)
+        assist = assist_scale * min(ASSIST_K * max(0.0, STAND_HEIGHT - float(self.data.qpos[2])), ASSIST_FMAX)
         self.prev_action = action
         self.t += 1
         self.total += 1
@@ -201,7 +206,7 @@ class GetUpEnv(_Base):
 if __name__ == "__main__":
     env = GetUpEnv()
     obs, _ = env.reset()
-    print("观测维度:", obs.shape, " 动作:", N, " 步/回合:", env.max_steps, " 初始助力:", round(ASSIST_MAX, 0), "N")
+    print("观测维度:", obs.shape, " 动作:", N, " 步/回合:", env.max_steps, " 支撑上限:", round(ASSIST_FMAX, 0), "N")
     tot = 0.0
     for i in range(env.max_steps):
         obs, r, te, tr, info = env.step(env.rng.uniform(-1, 1, N)); tot += r

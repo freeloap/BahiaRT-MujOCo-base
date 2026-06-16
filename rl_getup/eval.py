@@ -23,6 +23,7 @@ def main():
 
     model = PPO.load(args.model, device="cpu")
     env = GetUpEnv(seed=12345)
+    env.total = 10 ** 12   # 关闭训练用的垂直助力，测真实(部署=无助力)起身能力
 
     ok = 0
     hs, ups = [], []
