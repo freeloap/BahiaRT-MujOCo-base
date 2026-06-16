@@ -11,9 +11,9 @@ import sys
 import torch
 from stable_baselines3 import PPO
 
+import argparse
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-SRC = os.path.join(HERE, "getup_ppo.zip")
 DST = os.path.join(ROOT, "mujococodebase", "skills", "rl", "get_up.onnx")
 
 
@@ -28,9 +28,14 @@ class OnnxablePolicy(torch.nn.Module):
 
 
 def main():
-    if not os.path.exists(SRC):
-        sys.exit(f"找不到 {SRC}，请先训练（train.py）。")
-    model = PPO.load(SRC, device="cpu")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--model", default=os.path.join(HERE, "getup_best.zip"),
+                    help="要导出的模型(默认 getup_best.zip)")
+    args = ap.parse_args()
+    src = args.model
+    if not os.path.exists(src):
+        sys.exit(f"找不到 {src}，请先训练（train.py）。")
+    model = PPO.load(src, device="cpu")
     wrapper = OnnxablePolicy(model.policy).eval()
 
     obs_dim = model.observation_space.shape[0]
@@ -41,6 +46,7 @@ def main():
         input_names=["obs"], output_names=["action"],
         dynamic_axes={"obs": {0: "batch"}, "action": {0: "batch"}},
         opset_version=13,
+        dynamo=False,   # 用传统 TorchScript 导出器，对 SB3 策略更稳
     )
     print(f"已导出 onnx: {DST}  (obs_dim={obs_dim})")
 

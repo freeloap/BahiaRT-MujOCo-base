@@ -27,6 +27,16 @@ class SkillsManager:
         # instantiate each Skill and store in the skills dictionary
         self.skills = {cls.__name__: cls(agent=self.agent) for cls in classes}
 
+        # 若已训练并导出 RL 起身策略(get_up.onnx)，额外注册 GetUpRL；
+        # 缺模型/依赖则静默回退到关键帧起身，保证启动不受影响。
+        try:
+            import os
+            from mujococodebase.skills.rl.get_up_rl import GetUpRL, MODEL_PATH
+            if os.path.exists(MODEL_PATH):
+                self.skills["GetUpRL"] = GetUpRL(agent=self.agent)
+        except Exception:
+            pass
+
     def get_skill_object(self, name: str) -> Skill:
         """Returns the Skill instance corresponding to the given name."""
         if name not in self.skills:

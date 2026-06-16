@@ -112,9 +112,11 @@ class DecisionMaker:
         if group in (PlayModeGroupEnum.ACTIVE_BEAM, PlayModeGroupEnum.PASSIVE_BEAM):
             self._beam_to(self.home_position(), rotation=0.0)
 
-        # 倒地起身拥有最高优先级：只要正在起身或满足起身条件，先把人扶起来
-        if self.is_getting_up or self.agent.skills_manager.is_ready(skill_name="GetUp"):
-            self.is_getting_up = not self.agent.skills_manager.execute(skill_name="GetUp")
+        # 倒地起身拥有最高优先级：只要正在起身或满足起身条件，先把人扶起来。
+        # 若已训练好 RL 起身策略(GetUpRL)则优先用它，否则回退关键帧 GetUp。
+        getup = "GetUpRL" if "GetUpRL" in self.agent.skills_manager.skills else "GetUp"
+        if self.is_getting_up or self.agent.skills_manager.is_ready(skill_name=getup):
+            self.is_getting_up = not self.agent.skills_manager.execute(skill_name=getup)
             self.agent.robot.commit_motor_targets_pd()
             return
 

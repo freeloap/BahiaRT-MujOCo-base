@@ -10,3 +10,9 @@ poetry.toml
 **/log/
 *.spec
 dist/
+
+# RL 起身训练产物（不入库；只保留 get_up.onnx 与里程碑模型）
+rl_getup/.venv_rl/
+rl_getup/getup_ckpt_*.zip
+rl_getup/ckpt/
+rl_getup/tb/
