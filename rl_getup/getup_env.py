@@ -82,6 +82,7 @@ class GetUpEnv(_Base):
         self.prev_action = np.zeros(N)
         self.t = 0
         self.total = 0          # 本环境累计步数（用于助力退火）
+        self.assist_off = bool(os.environ.get("GETUP_ASSIST_OFF"))  # 续训精修时关助力
         if _HAS_GYM:
             self.action_space = spaces.Box(-1.0, 1.0, (N,), np.float32)
             hi = np.full(75, np.inf, np.float32)
@@ -174,7 +175,7 @@ class GetUpEnv(_Base):
         action = np.asarray(action, np.float32)
         target = self._action_to_target(action)
         # 弹性支撑助力（随训练退火）：越低于站立高度支撑越大、到站立高归零
-        assist_scale = max(0.0, 1.0 - self.total / ASSIST_ANNEAL)
+        assist_scale = 0.0 if self.assist_off else max(0.0, 1.0 - self.total / ASSIST_ANNEAL)
         for _ in range(self.n_sub):
             h_now = float(self.data.qpos[2])
             support = min(ASSIST_K * max(0.0, STAND_HEIGHT - h_now), ASSIST_FMAX)

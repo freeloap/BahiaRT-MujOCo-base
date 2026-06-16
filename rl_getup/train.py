@@ -28,17 +28,22 @@ def main():
     ap.add_argument("--steps", type=int, default=5_000_000, help="总训练步数")
     ap.add_argument("--n-envs", type=int, default=8, help="并行环境数")
     ap.add_argument("--out", type=str, default=os.path.join(os.path.dirname(__file__), "getup_ppo"))
+    ap.add_argument("--resume", type=str, default=None, help="从已有模型续训（如 rl_getup/getup_ppo.zip）")
     args = ap.parse_args()
 
     env = SubprocVecEnv([make_env(i) for i in range(args.n_envs)])
     env = VecMonitor(env)  # 记录每回合回报，使日志出现 rollout/ep_rew_mean
-    model = PPO(
-        "MlpPolicy", env,
-        n_steps=2048, batch_size=2048, gae_lambda=0.95, gamma=0.99,
-        learning_rate=3e-4, ent_coef=0.01, n_epochs=5,
-        policy_kwargs=dict(net_arch=[256, 256]),
-        verbose=1,
-    )
+    if args.resume:
+        model = PPO.load(args.resume, env=env)
+        print(f"从 {args.resume} 续训")
+    else:
+        model = PPO(
+            "MlpPolicy", env,
+            n_steps=2048, batch_size=2048, gae_lambda=0.95, gamma=0.99,
+            learning_rate=3e-4, ent_coef=0.01, n_epochs=5,
+            policy_kwargs=dict(net_arch=[256, 256]),
+            verbose=1,
+        )
     ckpt = CheckpointCallback(save_freq=max(1, 200_000 // args.n_envs),
                               save_path=os.path.dirname(args.out), name_prefix="getup_ckpt")
     model.learn(total_timesteps=args.steps, callback=ckpt)
